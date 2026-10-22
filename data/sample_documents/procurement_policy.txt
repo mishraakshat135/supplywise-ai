@@ -1,0 +1,28 @@
+# SupplyWise AI — Sample Procurement Policy
+
+Document ID: POL-001
+Version: 1.0
+
+## 1. Supplier Delivery Requirements
+
+Suppliers must deliver standard purchase orders within 7 calendar days of order confirmation unless a different lead time is agreed in writing.
+
+## 2. Late Delivery Penalties
+
+If a supplier delivers an order more than 3 calendar days after the agreed delivery date, the procurement team must review the delay and document the reason.
+
+For delays exceeding 7 calendar days beyond the agreed delivery date, the buyer may apply a penalty of 2% of the delayed order value, subject to the signed supplier contract.
+
+## 3. Minimum Order Quantity
+
+The purchase order quantity must meet the supplier's agreed minimum order quantity (MOQ). Any exception requires written approval from the procurement manager.
+
+## 4. Supplier Reliability
+
+Supplier reliability must be evaluated using documented delivery performance and quality records. Price alone must not determine supplier selection.
+
+## 5. Approval Requirements
+
+Purchase orders exceeding ₹100,000 require approval from the procurement manager before the order is issued.
+
+This is a synthetic document created for software testing. It is not an official company policy or legal contract.
