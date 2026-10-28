@@ -1,0 +1,36 @@
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Keep the example configuration
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated ML models and vector indexes
+data/models/
+data/chroma/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

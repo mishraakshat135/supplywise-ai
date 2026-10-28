@@ -1,0 +1,3 @@
+Orders above 50000 need manager approval.
+
+Late delivery penalty is 2 percent.
