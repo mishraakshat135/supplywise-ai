@@ -15,9 +15,41 @@ import {
   Drawer,
   Button,
   EmptyState,
+  Modal,
 } from "../components/common/UI.jsx";
-import { suppliers } from "../services/mock/data.js";
+import { supplierService } from "../services/api/domainServices.js";
+import { post } from "../services/api/apiClient.js";
+import { useAsync } from "../services/api/useAsync.js";
 export default function Suppliers() {
+  const {
+    data: suppliers,
+    loading,
+    error: loadError,
+    reload,
+  } = useAsync(() => supplierService.list(), []);
+  const [adding, setAdding] = useState(false),
+    [formError, setFormError] = useState("");
+  const addSupplier = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    try {
+      await post("/api/suppliers", {
+        name: fd.get("name"),
+        categories: String(fd.get("categories") || "")
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean),
+        reliability: Number(fd.get("reliability")),
+        availability: fd.get("availability"),
+      });
+      setAdding(false);
+      setFormError("");
+      await reload();
+      window.showToast("Supplier added.");
+    } catch (err) {
+      setFormError(err.message);
+    }
+  };
   const [q, setQ] = useState(""),
     [cat, setCat] = useState("All categories"),
     [selected, setSelected] = useState(null),
@@ -27,12 +59,12 @@ export default function Suppliers() {
     () =>
       suppliers.filter(
         (s) =>
-          `${s.name} ${s.id} ${s.categories.join(" ")}`
+          `${s.name} ${s.code} ${s.categories.join(" ")}`
             .toLowerCase()
             .includes(q.toLowerCase()) &&
           (cat === "All categories" || s.categories.includes(cat)),
       ),
-    [q, cat],
+    [q, cat, suppliers],
   );
   return (
     <>
@@ -43,20 +75,24 @@ export default function Suppliers() {
         actions={
           <Button
             variant="primary"
-            onClick={() =>
-              window.showToast(
-                "Supplier creation requires a connected backend.",
-              )
-            }
+            onClick={() => setAdding(true)}
           >
             ＋ Add supplier
           </Button>
         }
       />
       <div className="demo-banner">
-        <span className="demo-dot" /> DEMO DATA{" "}
-        <span className="banner-sep">·</span> Illustrative supplier attributes,
-        not live offers or performance records.
+        <span className="demo-dot" />{" "}
+        {loadError ? `BACKEND ERROR · ${loadError}` : "LIVE DATA"}
+        {!loadError && (
+          <>
+            {" "}
+            <span className="banner-sep">·</span>{" "}
+            {loading
+              ? "Loading from the backend…"
+              : "Price, lead time and MOQ show each supplier's cheapest offer."}
+          </>
+        )}
       </div>
       <div className="table-toolbar">
         <SearchInput
@@ -96,7 +132,7 @@ export default function Suppliers() {
               </div>
               <div className="supplier-title">
                 <h2>{s.name}</h2>
-                <span>{s.id}</span>
+                <span>{s.code}</span>
               </div>
               <button
                 className={`compare-check ${compare.includes(s.id) ? "checked" : ""}`}
@@ -123,27 +159,27 @@ export default function Suppliers() {
             <div className="supplier-metrics">
               <div>
                 <small>UNIT PRICE</small>
-                <b>{s.price}</b>
+                <b>{s.price ?? "—"}</b>
               </div>
               <div>
                 <small>LEAD TIME</small>
                 <b>
                   <Clock3 size={14} />
-                  {s.lead} days
+                  {s.lead != null ? `${s.lead} days` : "—"}
                 </b>
               </div>
               <div>
                 <small>MIN. ORDER</small>
                 <b>
                   <PackageCheck size={14} />
-                  {s.moq} units
+                  {s.moq != null ? `${s.moq} units` : "—"}
                 </b>
               </div>
             </div>
             <div className="supplier-card-foot">
               <span className="reliability">
                 <ShieldCheck size={15} />
-                <b>{s.reliability}%</b> demo reliability
+                <b>{s.reliability}%</b> on-time reliability
               </span>
               <Badge tone={s.availability === "Available" ? "green" : "amber"}>
                 {s.availability}
@@ -152,7 +188,7 @@ export default function Suppliers() {
           </article>
         ))}
       </div>
-      {filtered.length === 0 && (
+      {!loading && filtered.length === 0 && (
         <EmptyState
           title="No suppliers found"
           detail="Try a different search or category filter."
@@ -184,6 +220,54 @@ export default function Suppliers() {
           </button>
         </div>
       )}
+      {adding && (
+        <Modal title="Add supplier" onClose={() => setAdding(false)}>
+          <form className="form" onSubmit={addSupplier}>
+            <label>
+              Supplier name
+              <input name="name" required placeholder="e.g. Delta Components" />
+            </label>
+            <label>
+              Categories (comma separated)
+              <input name="categories" placeholder="Electronics, Hardware" />
+            </label>
+            <div className="form-row">
+              <label>
+                On-time reliability (%)
+                <input
+                  type="number"
+                  name="reliability"
+                  min="0"
+                  max="100"
+                  defaultValue="90"
+                  required
+                />
+              </label>
+              <label>
+                Availability
+                <select name="availability" defaultValue="Available">
+                  <option>Available</option>
+                  <option>Limited</option>
+                  <option>Unavailable</option>
+                </select>
+              </label>
+            </div>
+            {formError && <p className="form-error">{formError}</p>}
+            <div className="modal-actions">
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() => setAdding(false)}
+              >
+                Cancel
+              </Button>
+              <Button variant="primary" type="submit">
+                Add supplier
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
       {selected && (
         <Drawer title="Supplier details" onClose={() => setSelected(null)}>
           <div className="drawer-product">
@@ -192,34 +276,33 @@ export default function Suppliers() {
             </div>
             <div>
               <h3>{selected.name}</h3>
-              <span>{selected.id} · Illustrative demo record</span>
+              <span>{selected.code}</span>
             </div>
           </div>
           <div className="detail-grid">
             <div>
               <small>PRICE BASIS</small>
-              <b>{selected.price}</b>
+              <b>{selected.price ?? "—"}</b>
             </div>
             <div>
               <small>LEAD TIME</small>
-              <b>{selected.lead} days</b>
+              <b>{selected.lead != null ? `${selected.lead} days` : "—"}</b>
             </div>
             <div>
               <small>MINIMUM ORDER</small>
-              <b>{selected.moq} units</b>
+              <b>{selected.moq != null ? `${selected.moq} units` : "—"}</b>
             </div>
             <div>
               <small>RELIABILITY</small>
-              <b>{selected.reliability}% demo</b>
+              <b>{selected.reliability}%</b>
             </div>
           </div>
           <div className="drawer-section">
             <h3>Ranking criteria</h3>
             <p className="drawer-copy">
-              The repository's supplier agent scores normalized price (40%),
-              lead time (25%), and reliability (35%), then ranks MOQ-feasible
-              suppliers first. This screen displays illustrative values; it does
-              not execute that agent.
+              The supplier agent scores normalized price (40%), lead time
+              (25%), and reliability (35%), then ranks MOQ-feasible suppliers
+              first. It runs automatically on the AI Procurement page.
             </p>
           </div>
           <Button

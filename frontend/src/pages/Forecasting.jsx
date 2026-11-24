@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AreaChart,
   Area,
@@ -12,28 +12,97 @@ import {
 import { CalendarDays, Info, TrendingUp } from "lucide-react";
 import PageHeader from "../components/common/PageHeader.jsx";
 import { Badge, SelectField } from "../components/common/UI.jsx";
-import { demand, products } from "../services/mock/data.js";
+import { inventoryService, forecastService } from "../services/api/domainServices.js";
+import { useAsync } from "../services/api/useAsync.js";
+
+const metric = (m, ...keys) => {
+  for (const k of keys) if (m && m[k] != null) return Number(m[k]).toFixed(2);
+  return "Not available";
+};
+
 export default function Forecasting() {
-  const [horizon, setHorizon] = useState("30 days"),
-    [product, setProduct] = useState("EL-2048");
+  const { data: products, error: productsError } = useAsync(
+    () => inventoryService.list(),
+    [],
+  );
+  const [horizon, setHorizon] = useState(30),
+    [productId, setProductId] = useState(null),
+    [fc, setFc] = useState(null),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+
+  useEffect(() => {
+    if (products.length && productId == null) setProductId(products[0].id);
+  }, [products, productId]);
+
+  // Load the latest forecast for the product; create one if none exists or the horizon differs.
+  useEffect(() => {
+    if (productId == null) return undefined;
+    let alive = true;
+    (async () => {
+      setBusy(true);
+      setError("");
+      try {
+        let f;
+        try {
+          f = await forecastService.latest(productId);
+          if (f.horizon_days !== horizon) {
+            f = await forecastService.predict(productId, horizon);
+          }
+        } catch (e) {
+          if (e.status !== 404) throw e;
+          f = await forecastService.predict(productId, horizon);
+        }
+        if (alive) setFc(f);
+      } catch (e) {
+        if (alive) {
+          setFc(null);
+          setError(e.message);
+        }
+      } finally {
+        if (alive) setBusy(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [productId, horizon]);
+
+  const product = products.find((p) => p.id === productId);
+  const series = fc?.series ?? [];
+  const boundary = [...series].reverse().find((d) => d.actual != null)?.day;
+
   return (
     <>
       <PageHeader
         eyebrow="ANALYTICS / PLANNING"
         title="Forecasting & analytics"
-        description="Explore illustrative demand patterns to support replenishment planning."
-        actions={<Badge tone="amber">ILLUSTRATIVE DATA</Badge>}
+        description="Explore demand history and predicted demand to support replenishment planning."
+        actions={
+          <Badge tone={fc ? "teal" : "amber"}>
+            {fc ? "LIVE FORECAST" : "NO FORECAST"}
+          </Badge>
+        }
       />
       <div className="demo-banner">
-        <Info size={15} /> This forecast is demo data. No production
-        predictions, accuracy metrics, or confidence intervals are available.
+        <Info size={15} />{" "}
+        {productsError || error
+          ? `BACKEND ERROR · ${productsError || error}`
+          : busy
+            ? "Generating forecast…"
+            : fc
+              ? `Forecast provider: ${fc.provider}${fc.model_version ? ` (${fc.model_version})` : ""}. Observed values are your recorded sales.`
+              : "Select a product to load its forecast."}
       </div>
       <div className="forecast-controls">
         <label>
           <span>PRODUCT</span>
-          <SelectField value={product} onChange={setProduct}>
+          <SelectField
+            value={productId ?? ""}
+            onChange={(v) => setProductId(Number(v))}
+          >
             {products.map((p) => (
-              <option key={p.sku} value={p.sku}>
+              <option key={p.id} value={p.id}>
                 {p.sku} · {p.name}
               </option>
             ))}
@@ -41,60 +110,66 @@ export default function Forecasting() {
         </label>
         <label>
           <span>FORECAST HORIZON</span>
-          <SelectField value={horizon} onChange={setHorizon}>
-            <option>7 days</option>
-            <option>30 days</option>
-            <option>90 days</option>
+          <SelectField value={horizon} onChange={(v) => setHorizon(Number(v))}>
+            <option value={7}>7 days</option>
+            <option value={30}>30 days</option>
+            <option value={90}>90 days</option>
           </SelectField>
         </label>
         <div className="forecast-meta">
           <CalendarDays size={16} />
-          <span>Demo data generated Oct 22, 2026</span>
+          <span>
+            {fc
+              ? `Generated ${new Date(fc.generated_at).toLocaleString("en-IN")}`
+              : "No forecast generated yet"}
+          </span>
         </div>
       </div>
       <div className="forecast-kpis">
         <div className="panel forecast-stat">
           <span>Selected product</span>
-          <b>{products.find((p) => p.sku === product)?.name}</b>
-          <small>{product}</small>
+          <b>{product?.name ?? "—"}</b>
+          <small>{product?.sku}</small>
         </div>
         <div className="panel forecast-stat">
           <span>Current stock</span>
-          <b>{products.find((p) => p.sku === product)?.stock} units</b>
-          <small>Illustrative inventory</small>
+          <b>{product ? `${product.stock} units` : "—"}</b>
+          <small>From the inventory database</small>
         </div>
         <div className="panel forecast-stat">
           <span>Forecast horizon</span>
-          <b>{horizon}</b>
-          <small>Sample chart window</small>
+          <b>{horizon} days</b>
+          <small>
+            {fc ? `≈ ${fc.daily_average} units/day · ${fc.total} total` : ""}
+          </small>
         </div>
         <div className="panel forecast-stat">
           <span>Model metadata</span>
-          <b>Unavailable</b>
-          <small>Not connected to model service</small>
+          <b>{fc?.provider ?? "Unavailable"}</b>
+          <small>{fc?.model_version ?? ""}</small>
         </div>
       </div>
       <section className="panel forecast-chart-panel">
         <div className="panel-heading">
           <div>
             <h2>Observed and predicted demand</h2>
-            <p>Units per day · illustrative sample series</p>
+            <p>Units per day · last 30 days observed, then forecast</p>
           </div>
           <div className="chart-legend">
             <span>
               <i className="legend-dot actual" />
-              Observed (demo)
+              Observed
             </span>
             <span>
               <i className="legend-dot forecast" />
-              Predicted (demo)
+              Predicted
             </span>
           </div>
         </div>
         <div className="big-chart">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
-              data={demand}
+              data={series}
               margin={{ top: 18, right: 18, left: -16, bottom: 0 }}
             >
               <defs>
@@ -113,6 +188,8 @@ export default function Forecasting() {
                 tick={{ fill: "#8190a8", fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
+                interval="preserveStartEnd"
+                minTickGap={24}
               />
               <YAxis
                 tick={{ fill: "#8190a8", fontSize: 11 }}
@@ -126,20 +203,22 @@ export default function Forecasting() {
                   borderRadius: 9,
                 }}
               />
-              <ReferenceLine
-                x="Oct 19"
-                stroke="#75839a"
-                strokeDasharray="4 4"
-                label={{
-                  value: "FORECAST START",
-                  fill: "#9ca9ba",
-                  fontSize: 10,
-                  position: "insideTopRight",
-                }}
-              />
+              {boundary && (
+                <ReferenceLine
+                  x={boundary}
+                  stroke="#75839a"
+                  strokeDasharray="4 4"
+                  label={{
+                    value: "FORECAST START",
+                    fill: "#9ca9ba",
+                    fontSize: 10,
+                    position: "insideTopRight",
+                  }}
+                />
+              )}
               <Area
                 dataKey="actual"
-                name="Observed demand (demo)"
+                name="Observed demand"
                 stroke="#14b8a6"
                 fill="#14b8a6"
                 fillOpacity={0.09}
@@ -147,7 +226,7 @@ export default function Forecasting() {
               />
               <Area
                 dataKey="forecast"
-                name="Predicted demand (demo)"
+                name="Predicted demand"
                 stroke="#818cf8"
                 fill="url(#forecastFill)"
                 strokeWidth={2.5}
@@ -159,9 +238,10 @@ export default function Forecasting() {
         <div className="forecast-chart-note">
           <TrendingUp size={16} />
           <span>
-            The dotted boundary marks the start of illustrative predictions.
-            Historical values and forecast series are sample data for interface
-            demonstration.
+            The dotted line marks where observed sales end and predictions
+            begin. Predictions come from the forecasting provider shown above;
+            the team's trained ML model can replace it without changing this
+            page.
           </span>
         </div>
       </section>
@@ -169,27 +249,29 @@ export default function Forecasting() {
         <div className="panel-heading">
           <div>
             <h2>Planning context</h2>
-            <p>Related inventory and service metadata</p>
+            <p>Related inventory and model metadata</p>
           </div>
         </div>
         <div className="context-grid">
           <div>
             <small>REORDER POINT</small>
-            <b>{products.find((p) => p.sku === product)?.reorder} units</b>
+            <b>{product ? `${product.reorder} units` : "—"}</b>
           </div>
           <div>
-            <small>SUPPLIER LEAD TIME</small>
-            <b>Demo value · see supplier directory</b>
+            <small>AVERAGE DAILY DEMAND</small>
+            <b>{fc ? `${fc.daily_average} units` : "—"}</b>
           </div>
           <div>
             <small>MAE / WAPE</small>
-            <b>Not available</b>
-            <span>No evaluation data provided</span>
+            <b>
+              {metric(fc?.metrics, "mae", "MAE")} /{" "}
+              {metric(fc?.metrics, "wape", "WAPE")}
+            </b>
           </div>
           <div>
             <small>MODEL VERSION</small>
-            <b>Not connected</b>
-            <span>Backend integration pending</span>
+            <b>{fc?.model_version ?? "—"}</b>
+            <span>{fc?.provider ?? ""}</span>
           </div>
         </div>
       </section>

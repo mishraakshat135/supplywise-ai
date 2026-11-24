@@ -12,43 +12,11 @@ import {
   Info,
 } from "lucide-react";
 import PageHeader from "../components/common/PageHeader.jsx";
-import { Badge, Button, Drawer } from "../components/common/UI.jsx";
-import { products, suppliers } from "../services/mock/data.js";
-const recommendations = [
-  {
-    id: "REC-104",
-    product: products[0],
-    forecast: 48,
-    quantity: 40,
-    supplier: suppliers[0],
-    cost: 99200,
-    eta: 5,
-    reason:
-      "On-hand stock is below the reorder point. Selected supplier meets the MOQ and has the shortest feasible delivery time in this comparison.",
-  },
-  {
-    id: "REC-102",
-    product: products[6],
-    forecast: 36,
-    quantity: 50,
-    supplier: suppliers[2],
-    cost: 21500,
-    eta: 3,
-    reason:
-      "Critical stock threshold crossed. Suggested quantity covers illustrative forecast demand; supplier MOQ is compatible.",
-  },
-  {
-    id: "REC-099",
-    product: products[5],
-    forecast: 82,
-    quantity: 80,
-    supplier: suppliers[3],
-    cost: 14880,
-    eta: 4,
-    reason:
-      "Current stock is below reorder point. PackRight demo offer meets the proposed quantity.",
-  },
-];
+import { Badge, Button, Drawer, EmptyState } from "../components/common/UI.jsx";
+import { procurementService } from "../services/api/domainServices.js";
+import { useAsync } from "../services/api/useAsync.js";
+const short = (text, n = 240) =>
+  text && text.length > n ? `${text.slice(0, n)}…` : text;
 const stages = [
   ["Detect need", Package],
   ["Compare suppliers", Truck],
@@ -56,17 +24,50 @@ const stages = [
   ["Your decision", ClipboardCheck],
 ];
 export default function Procurement() {
-  const [rows, setRows] = useState(
-      recommendations.map((r) => ({ ...r, status: "Pending review" })),
-    ),
-    [selected, setSelected] = useState(null);
-  const act = (id, status) => {
-    setRows((a) => a.map((r) => (r.id === id ? { ...r, status } : r)));
-    setSelected(null);
-    window.showToast(
-      `Recommendation ${status.toLowerCase()} in this demo session.`,
-    );
+  const {
+      data: rows,
+      loading,
+      error: loadError,
+      reload,
+    } = useAsync(() => procurementService.list(), []),
+    [selected, setSelected] = useState(null),
+    [busy, setBusy] = useState(false);
+  const act = async (id, action) => {
+    setBusy(true);
+    try {
+      await procurementService[action](id);
+      await reload();
+      setSelected(null);
+      window.showToast(
+        action === "approve"
+          ? "Recommendation approved and purchase order created."
+          : action === "reject"
+            ? "Recommendation rejected."
+            : "Recommendation flagged for follow-up.",
+      );
+    } catch (e) {
+      window.showToast(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
+  const runAnalysis = async () => {
+    setBusy(true);
+    window.showToast("Running forecast, supplier and policy analysis…");
+    try {
+      const res = await procurementService.generate({});
+      await reload();
+      const errs = res.errors?.length ? ` · ${res.errors.length} product(s) failed` : "";
+      window.showToast(
+        `${res.recommendations.length} recommendation(s) ready · ${res.no_action_needed} product(s) need no action${errs}.`,
+      );
+    } catch (e) {
+      window.showToast(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const decidable = (r) => ["Pending review", "Flagged"].includes(r.status);
   return (
     <>
       <PageHeader
@@ -74,22 +75,23 @@ export default function Procurement() {
         title="AI Procurement Center"
         description="Review replenishment signals, supplier options, and policy evidence before taking action."
         actions={
-          <Button
-            variant="secondary"
-            onClick={() =>
-              window.showToast(
-                "This page uses precomputed demo recommendations.",
-              )
-            }
-          >
-            ↻ Refresh demo
+          <Button variant="secondary" onClick={runAnalysis} disabled={busy}>
+            ↻ {busy ? "Working…" : "Run analysis"}
           </Button>
         }
       />
       <div className="demo-banner">
-        <span className="demo-dot" /> SIMULATED WORKFLOW{" "}
-        <span className="banner-sep">·</span> Agent findings and recommendations
-        below are illustrative; no agents were run for this session.
+        <span className="demo-dot" />{" "}
+        {loadError ? `BACKEND ERROR · ${loadError}` : "LIVE WORKFLOW"}
+        {!loadError && (
+          <>
+            {" "}
+            <span className="banner-sep">·</span>{" "}
+            {loading
+              ? "Loading…"
+              : "Click “Run analysis” to forecast demand, compare suppliers and check policy. Nothing is ordered until you approve."}
+          </>
+        )}
       </div>
       <section className="panel workflow-panel">
         <div className="workflow-head">
@@ -123,10 +125,15 @@ export default function Procurement() {
           </p>
         </div>
         <div className="agent-label">
-          <GitBranch size={15} /> Multi-agent review{" "}
-          <span className="sim-tag">SIMULATED</span>
+          <GitBranch size={15} /> Multi-agent review
         </div>
       </div>
+      {!loading && rows.length === 0 && (
+        <EmptyState
+          title="No recommendations yet"
+          detail="Click “Run analysis” to check every product against its forecast and reorder point."
+        />
+      )}
       <div className="recommendation-list">
         {rows.map((r) => (
           <article className="panel recommendation" key={r.id}>
@@ -136,7 +143,7 @@ export default function Procurement() {
               </div>
               <div className="rec-product">
                 <div className="rec-id">
-                  {r.id} <span>·</span> {r.product.sku}
+                  {r.code} <span>·</span> {r.product.sku}
                 </div>
                 <h3>{r.product.name}</h3>
                 <div className="rec-stock">
@@ -169,12 +176,14 @@ export default function Procurement() {
             <div className="rec-details">
               <div className="supplier-recommend">
                 <div className="small-label">
-                  TOP ELIGIBLE SUPPLIER <span>· DEMO</span>
+                  TOP ELIGIBLE SUPPLIER
                 </div>
-                <b>{r.supplier.name}</b>
+                <b>{r.supplier ? r.supplier.name : "No eligible supplier"}</b>
                 <span>
-                  {r.supplier.lead} day lead · MOQ {r.supplier.moq} ·{" "}
-                  {r.supplier.reliability}% illustrative reliability
+                  {r.eta != null ? `${r.eta} day lead` : "—"} ·{" "}
+                  {r.supplier
+                    ? `${r.supplier.reliability}% reliability`
+                    : "see warnings"}
                 </span>
               </div>
               <div className="rec-numbers">
@@ -186,11 +195,11 @@ export default function Procurement() {
                 </div>
                 <div>
                   <small>ESTIMATED COST</small>
-                  <b>₹{r.cost.toLocaleString("en-IN")}</b>
+                  <b>₹{(r.cost ?? 0).toLocaleString("en-IN")}</b>
                 </div>
                 <div>
                   <small>EXPECTED DELIVERY</small>
-                  <b>{r.eta} days</b>
+                  <b>{r.eta != null ? `${r.eta} days` : "—"}</b>
                 </div>
               </div>
             </div>
@@ -198,24 +207,23 @@ export default function Procurement() {
               <div>
                 <span className="agent-dot teal" />
                 <b>Procurement</b>
-                <span>
-                  Below reorder point; proposed quantity is illustrative.
-                </span>
+                <span>{short(r.reason) || "No explanation returned."}</span>
               </div>
               <div>
                 <span className="agent-dot blue" />
                 <b>Supplier</b>
                 <span>
-                  MOQ-feasible alternative found; price and lead time shown
-                  separately.
+                  {r.ranked_suppliers?.length
+                    ? `${r.ranked_suppliers.length} supplier(s) compared; top choice ${r.supplier?.name ?? "n/a"}.`
+                    : "No supplier comparison available."}
                 </span>
               </div>
               <div>
                 <span className="agent-dot violet" />
                 <b>Policy analyst</b>
                 <span>
-                  MOQ must be met; orders over ₹100,000 require manager approval
-                  (sample policy).
+                  {short(r.policy_analysis) ||
+                    "Policy check not available (see details)."}
                 </span>
               </div>
             </div>
@@ -224,34 +232,38 @@ export default function Procurement() {
                 <Info size={14} /> Recommendation details & evidence
               </button>
               <div className="rec-actions">
-                {r.status === "Pending review" ? (
+                {decidable(r) ? (
                   <>
                     <Button
                       variant="ghost-danger"
-                      onClick={() => act(r.id, "Rejected")}
+                      disabled={busy}
+                      onClick={() => act(r.id, "reject")}
                     >
                       <X size={14} /> Reject
                     </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => act(r.id, "Flagged")}
-                    >
-                      <Flag size={14} /> Flag
-                    </Button>
+                    {r.status !== "Flagged" && (
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => act(r.id, "flag")}
+                      >
+                        <Flag size={14} /> Flag
+                      </Button>
+                    )}
                     <Button
                       variant="primary"
-                      onClick={() => act(r.id, "Approved")}
+                      disabled={busy || !r.supplier}
+                      onClick={() => act(r.id, "approve")}
                     >
                       <Check size={15} /> Approve recommendation
                     </Button>
                   </>
                 ) : (
-                  <Button
-                    variant="secondary"
-                    onClick={() => act(r.id, "Pending review")}
-                  >
-                    Return to review
-                  </Button>
+                  <span className="toolbar-hint">
+                    {r.purchase_order
+                      ? `Purchase order ${r.purchase_order.po_number} created`
+                      : `Decision recorded: ${r.status}`}
+                  </span>
                 )}
               </div>
             </div>
@@ -264,32 +276,39 @@ export default function Procurement() {
           onClose={() => setSelected(null)}
         >
           <div className="drawer-section">
-            <Badge tone="teal">SIMULATED AGENT OUTPUT</Badge>
+            <Badge tone="teal">AGENT OUTPUT</Badge>
             <h3 className="drawer-title">{selected.product.name}</h3>
             <p className="drawer-copy">{selected.reason}</p>
           </div>
           <div className="drawer-section">
             <h3>Evidence & constraints</h3>
-            <div className="evidence-card">
-              <b>POL-001 · Sample Procurement Policy · §3</b>
-              <p>
-                “The purchase order quantity must meet the supplier's agreed
-                minimum order quantity (MOQ). Any exception requires written
-                approval from the procurement manager.”
+            {selected.policy_analysis ? (
+              <div className="evidence-card">
+                <b>Policy analysis</b>
+                <p>{selected.policy_analysis}</p>
+              </div>
+            ) : (
+              <p className="drawer-copy">
+                No policy analysis was returned for this recommendation.
               </p>
-              <small>
-                Sample file in repository · synthetic test document · passage
-                shown for context, not retrieved in this demo.
-              </small>
-            </div>
-            <div className="evidence-card">
-              <b>POL-001 · §5 Approval Requirements</b>
-              <p>
-                Purchase orders exceeding ₹100,000 require procurement manager
-                approval before issue.
-              </p>
-              <small>Quoted from the sample policy file.</small>
-            </div>
+            )}
+            {Object.entries(selected.policy_sources || {}).map(([key, src]) => (
+              <div className="evidence-card" key={key}>
+                <b>
+                  {src.source ?? key}
+                  {src.page != null ? ` · page ${src.page}` : ""}
+                </b>
+                {(src.text ?? src.content ?? src.snippet) && (
+                  <p>{src.text ?? src.content ?? src.snippet}</p>
+                )}
+              </div>
+            ))}
+            {(selected.warnings || []).map((w, i) => (
+              <div className="evidence-card" key={`w${i}`}>
+                <b>Warning</b>
+                <p>{typeof w === "string" ? w : JSON.stringify(w)}</p>
+              </div>
+            ))}
           </div>
           <div className="drawer-section">
             <h3>Decision factors</h3>
@@ -305,39 +324,50 @@ export default function Procurement() {
             </div>
             <div className="movement">
               <span>
-                <b>Supplier MOQ</b>
+                <b>Suggested order</b>
                 <small>
-                  {selected.supplier.moq} units · proposed {selected.quantity}
+                  {selected.quantity} units
+                  {selected.supplier ? ` from ${selected.supplier.name}` : ""}
                 </small>
               </span>
-              <Badge tone="green">Compatible</Badge>
+              <Badge tone={selected.requires_manager_approval ? "amber" : "green"}>
+                {selected.requires_manager_approval
+                  ? "Manager approval"
+                  : "Standard approval"}
+              </Badge>
             </div>
             <div className="movement">
               <span>
                 <b>Estimated total</b>
-                <small>{selected.quantity} × illustrative unit price</small>
+                <small>{selected.quantity} × supplier unit price</small>
               </span>
-              <strong>₹{selected.cost.toLocaleString("en-IN")}</strong>
+              <strong>₹{(selected.cost ?? 0).toLocaleString("en-IN")}</strong>
             </div>
           </div>
           <div className="drawer-note">
-            <Info size={15} /> Approval updates this local demo only. No
-            purchase order is created or sent.
+            <Info size={15} /> Approving creates an internal purchase order
+            record. Nothing is sent to a supplier.
           </div>
-          <div className="drawer-actions">
-            <Button
-              variant="secondary"
-              onClick={() => act(selected.id, "Flagged")}
-            >
-              <Flag size={14} /> Flag
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => act(selected.id, "Approved")}
-            >
-              <Check size={15} /> Approve
-            </Button>
-          </div>
+          {decidable(selected) && (
+            <div className="drawer-actions">
+              {selected.status !== "Flagged" && (
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => act(selected.id, "flag")}
+                >
+                  <Flag size={14} /> Flag
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                disabled={busy || !selected.supplier}
+                onClick={() => act(selected.id, "approve")}
+              >
+                <Check size={15} /> Approve
+              </Button>
+            </div>
+          )}
         </Drawer>
       )}
     </>

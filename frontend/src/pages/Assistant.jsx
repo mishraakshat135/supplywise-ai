@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Send,
   Paperclip,
@@ -9,69 +9,106 @@ import {
   Database,
   ExternalLink,
   Info,
+  Trash2,
 } from "lucide-react";
 import PageHeader from "../components/common/PageHeader.jsx";
 import { Badge, Button } from "../components/common/UI.jsx";
+import { assistantService } from "../services/api/domainServices.js";
+import { useAsync } from "../services/api/useAsync.js";
+
 const suggestions = [
   "Which products are at risk of stockout?",
-  "What does the sample policy say about minimum order quantities?",
-  "Why was Northstar recommended?",
+  "What does the policy say about minimum order quantities?",
+  "What is the approval requirement for large purchase orders?",
 ];
-const answers = [
-  {
-    match: /stockout|risk|replenish/i,
-    text: "In this illustrative inventory snapshot, 3 products are below their reorder points: Industrial pressure sensor (18 available, reorder at 30), Motor control relay (9 vs. 24), and Precision bearing 6204 (7 vs. 20). These are demo fixtures, not live stock levels.",
-    sources: [
-      "Inventory demo fixture · EL-2048",
-      "Inventory demo fixture · EL-3091",
-      "Inventory demo fixture · MT-0904",
-    ],
-  },
-  {
-    match: /policy|minimum|moq/i,
-    text: "The sample procurement policy says purchase quantities must meet the supplier’s agreed minimum order quantity (MOQ). An exception requires written approval from the procurement manager. The file is labeled synthetic and is not an official company policy.",
-    sources: [
-      "procurement_policy.txt · §3 Minimum Order Quantity · sample document",
-    ],
-  },
-  {
-    match: /northstar|supplier|recommended|compare/i,
-    text: "For the illustrative EL-2048 scenario, Northstar has a 5-day lead time, MOQ of 10, and 96% demo reliability. The repository supplier agent ranks on normalized price (40%), lead time (25%), and reliability (35%), prioritizing MOQ-feasible offers. No agent was run for this response.",
-    sources: [
-      "Supplier demo fixture · SUP-014",
-      "backend/app/agents/supplier_agent.py · ranking weights",
-    ],
-  },
-];
+
 export default function Assistant() {
   const [messages, setMessages] = useState([]),
     [text, setText] = useState(""),
-    [selected, setSelected] = useState("procurement_policy.txt");
-  const ask = (q) => {
-    if (!q.trim()) return;
-    const answer = answers.find((a) => a.match.test(q)) || {
-      text: "I don’t have enough evidence in the available sample data to answer that reliably. Try asking about the demo inventory, supplier fields, or the sample procurement policy.",
-      sources: [],
-    };
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", text: q },
-      { role: "assistant", text: answer.text, sources: answer.sources },
-    ]);
+    [thinking, setThinking] = useState(false),
+    [uploading, setUploading] = useState(false),
+    [selected, setSelected] = useState(null),
+    fileRef = useRef(null);
+  const {
+    data: docs,
+    error: docsError,
+    reload: reloadDocs,
+  } = useAsync(() => assistantService.documents(), []);
+
+  const ask = async (q) => {
+    if (!q.trim() || thinking) return;
+    setMessages((prev) => [...prev, { role: "user", text: q }]);
     setText("");
+    setThinking(true);
+    try {
+      const r = await assistantService.ask(q);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: r.answer, sources: r.sources || [], mode: r.mode },
+      ]);
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: `Sorry, that failed: ${e.message}`, sources: [] },
+      ]);
+    } finally {
+      setThinking(false);
+    }
   };
+
+  const onPick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    try {
+      const doc = await assistantService.upload(file);
+      await reloadDocs();
+      window.showToast(
+        doc.status === "indexed"
+          ? `${doc.filename} uploaded and indexed (${doc.n_chunks} chunks).`
+          : `${doc.filename} uploaded but indexing failed: ${doc.error}`,
+      );
+    } catch (err) {
+      window.showToast(err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const remove = async (doc) => {
+    if (!window.confirm(`Delete ${doc.filename}?`)) return;
+    try {
+      await assistantService.removeDocument(doc.id);
+      await reloadDocs();
+      window.showToast("Document deleted.");
+    } catch (err) {
+      window.showToast(err.message);
+    }
+  };
+
+  const chosen = docs.find((d) => d.filename === selected);
+
   return (
     <>
       <PageHeader
         eyebrow="KNOWLEDGE / DOCUMENTS"
         title="AI Assistant"
-        description="Ask questions about inventory, suppliers, and the sample policy documents."
-        actions={<Badge tone="teal">DEMO ASSISTANT</Badge>}
+        description="Ask questions about inventory, suppliers, and your policy documents."
+        actions={<Badge tone="teal">LIVE ASSISTANT</Badge>}
       />
       <div className="demo-banner">
-        <Info size={15} /> Responses are simulated from the included sample
-        data. No RAG retrieval or language model is called from this frontend.
+        <Info size={15} /> Answers combine live inventory facts with a search of
+        the indexed policy documents. If the language model is not configured,
+        the assistant says so instead of guessing.
       </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,.txt"
+        style={{ display: "none" }}
+        onChange={onPick}
+      />
       <div className="assistant-layout">
         <section className="panel conversation">
           <div className="conversation-head">
@@ -81,7 +118,7 @@ export default function Assistant() {
             <div>
               <b>SupplyWise Assistant</b>
               <span>
-                <i className="status-pip" /> Sample knowledge enabled
+                <i className="status-pip" /> {thinking ? "Thinking…" : "Ready"}
               </span>
             </div>
             <button
@@ -99,8 +136,7 @@ export default function Assistant() {
               </div>
               <h2>What can I help you find?</h2>
               <p>
-                Ask a question to explore the sample inventory and procurement
-                context.
+                Ask about stock levels, suppliers or the procurement policy.
               </p>
               <div className="suggested-questions">
                 {suggestions.map((s) => (
@@ -122,10 +158,10 @@ export default function Assistant() {
                     <div className="message-name">
                       {m.role === "user" ? "You" : "SupplyWise Assistant"}
                     </div>
-                    <p>{m.text}</p>
+                    <p style={{ whiteSpace: "pre-wrap" }}>{m.text}</p>
                     {m.sources?.length > 0 && (
                       <div className="citations">
-                        <small>DEMO SOURCES</small>
+                        <small>SOURCES</small>
                         {m.sources.map((src) => (
                           <button
                             key={src}
@@ -141,6 +177,14 @@ export default function Assistant() {
                   </div>
                 </div>
               ))}
+              {thinking && (
+                <div className="message assistant">
+                  <div className="message-avatar">S</div>
+                  <div className="message-body">
+                    <p>Searching inventory and policy documents…</p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           <form
@@ -154,10 +198,9 @@ export default function Assistant() {
               type="button"
               className="icon-button"
               aria-label="Attach a document"
-              title="Uploads are not enabled in this demo"
-              onClick={() =>
-                window.showToast("Document upload requires backend processing.")
-              }
+              title="Upload a PDF or TXT document"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
             >
               <Paperclip size={17} />
             </button>
@@ -170,15 +213,14 @@ export default function Assistant() {
             <Button
               variant="primary"
               type="submit"
-              disabled={!text.trim()}
+              disabled={!text.trim() || thinking}
               aria-label="Send question"
             >
               <Send size={16} />
             </Button>
           </form>
           <div className="composer-caption">
-            Demo responses are illustrative. Verify decisions against source
-            documents.
+            Verify important decisions against the source documents.
           </div>
         </section>
         <aside className="assistant-side">
@@ -186,64 +228,80 @@ export default function Assistant() {
             <div className="panel-heading">
               <div>
                 <h2>Knowledge sources</h2>
-                <p>Available in this demo</p>
+                <p>{docs.length} document(s) available</p>
               </div>
               <Database size={16} />
             </div>
-            <div
-              className="document-row selected"
-              onClick={() => setSelected("procurement_policy.txt")}
-            >
-              <div className="file-icon">
-                <FileText size={17} />
+            {docs.map((d) => (
+              <div
+                key={`${d.id ?? "repo"}-${d.filename}`}
+                className={`document-row ${selected === d.filename ? "selected" : ""}`}
+                onClick={() => setSelected(d.filename)}
+              >
+                <div className="file-icon">
+                  <FileText size={17} />
+                </div>
+                <div>
+                  <b>{d.filename}</b>
+                  <span>
+                    {d.source === "repository" ? "Built-in" : "Uploaded"} ·{" "}
+                    {d.status}
+                  </span>
+                </div>
+                {!d.readonly ? (
+                  <button
+                    className="icon-button"
+                    aria-label={`Delete ${d.filename}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      remove(d);
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                ) : (
+                  <ChevronRight size={15} />
+                )}
               </div>
-              <div>
-                <b>procurement_policy.txt</b>
-                <span>Sample policy · synthetic</span>
-              </div>
-              <ChevronRight size={15} />
-            </div>
-            <div className="doc-note">
-              One sample policy document is present in the repository. Citations
-              in this UI are illustrative; they are not fetched using the RAG
-              system.
-            </div>
+            ))}
+            {docs.length === 0 && (
+              <div className="doc-note">No documents yet. Upload a PDF or TXT file.</div>
+            )}
             <Button
               variant="secondary"
               className="full-button"
-              onClick={() =>
-                window.showToast(
-                  "File upload is not enabled until document API contracts are defined.",
-                )
-              }
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
             >
-              <Plus size={15} /> Add document
+              <Plus size={15} /> {uploading ? "Uploading…" : "Add document"}
             </Button>
           </section>
           <section className="panel source-panel">
             <div className="panel-heading">
               <div>
-                <h2>Evidence preview</h2>
-                <p>Sample document excerpt</p>
+                <h2>Document details</h2>
+                <p>Select a document or a citation</p>
               </div>
-              <Badge tone="amber">SYNTHETIC</Badge>
             </div>
             <div className="source-preview">
               <div className="source-meta">
                 <FileText size={14} />
-                <span>{selected || "procurement_policy.txt"}</span>
+                <span>{selected || "No document selected"}</span>
               </div>
-              <h3>Minimum Order Quantity</h3>
-              <p>
-                “The purchase order quantity must meet the supplier's agreed
-                minimum order quantity (MOQ). Any exception requires written
-                approval from the procurement manager.”
-              </p>
-              <span className="page-ref">Sample file · section 3</span>
-            </div>
-            <div className="source-warning">
-              <Info size={14} /> Test document only. Not official company
-              policy.
+              {chosen ? (
+                <p>
+                  Status: {chosen.status}
+                  {chosen.n_chunks != null
+                    ? ` · ${chosen.n_chunks} indexed chunks`
+                    : ""}
+                  {chosen.size_bytes != null
+                    ? ` · ${Math.round(chosen.size_bytes / 1024) || 1} KB`
+                    : ""}
+                  {chosen.error ? ` · ${chosen.error}` : ""}
+                </p>
+              ) : (
+                <p>Click a document above to see its indexing status.</p>
+              )}
             </div>
           </section>
           <section className="panel connection-panel">
@@ -252,9 +310,11 @@ export default function Assistant() {
             </span>
             <div>
               <b>Backend connection</b>
-              <span>Not configured · demo mode</span>
+              <span>{docsError ? docsError : "Connected to the API"}</span>
             </div>
-            <Badge>OFFLINE</Badge>
+            <Badge tone={docsError ? "red" : "green"}>
+              {docsError ? "OFFLINE" : "ONLINE"}
+            </Badge>
           </section>
         </aside>
       </div>

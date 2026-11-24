@@ -16,9 +16,17 @@ import {
   Drawer,
   EmptyState,
 } from "../components/common/UI.jsx";
-import { products as initial } from "../services/mock/data.js";
+import { inventoryService, supplierService } from "../services/api/domainServices.js";
+import { useAsync } from "../services/api/useAsync.js";
 export default function Inventory() {
-  const [items, setItems] = useState(initial),
+  const {
+      data: items,
+      loading,
+      error: loadError,
+      reload,
+    } = useAsync(() => inventoryService.list(), []),
+    { data: supplierList } = useAsync(() => supplierService.list(), []),
+    [saving, setSaving] = useState(false),
     [q, setQ] = useState(""),
     [category, setCategory] = useState("All categories"),
     [status, setStatus] = useState("All status"),
@@ -45,7 +53,7 @@ export default function Inventory() {
         ),
     [items, q, category, status, sort],
   );
-  const save = (e) => {
+  const save = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget),
       name = fd.get("name").trim(),
@@ -59,29 +67,23 @@ export default function Inventory() {
       );
       return;
     }
-    const row = {
-      id: Date.now(),
-      name,
-      sku,
-      category: fd.get("category"),
-      stock,
-      reorder,
-      cost,
-      supplier: fd.get("supplier") || "Unassigned",
-      movements: [["Today", "Product created", "—"]],
-    };
-    setItems((prev) =>
-      form === "add"
-        ? [row, ...prev]
-        : prev.map((p) => (p.id === form.id ? { ...p, ...row, id: p.id } : p)),
-    );
-    setForm(null);
-    setError("");
-    window.showToast(
-      form === "add"
-        ? "Product added to this demo session."
-        : "Product updated in this demo session.",
-    );
+    const body = { name, sku, category: fd.get("category"), stock, reorder, cost };
+    const supplierId = Number(fd.get("supplier_id")) || null;
+    if (supplierId) body.supplier_id = supplierId;
+    const adding = form === "add";
+    setSaving(true);
+    try {
+      if (adding) await inventoryService.create(body);
+      else await inventoryService.update(form.id, body);
+      setForm(null);
+      setError("");
+      await reload();
+      window.showToast(adding ? "Product added." : "Product updated.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <>
@@ -94,7 +96,7 @@ export default function Inventory() {
             <Button
               variant="secondary"
               onClick={() =>
-                window.showToast("Inventory export is a demo action.")
+                window.showToast("Inventory export is not implemented yet.")
               }
             >
               <Download size={15} /> Export
@@ -106,9 +108,17 @@ export default function Inventory() {
         }
       />
       <div className="demo-banner">
-        <span className="demo-dot" /> DEMO DATA{" "}
-        <span className="banner-sep">·</span> Changes stay in this browser
-        session and are not sent to a backend.
+        <span className="demo-dot" />{" "}
+        {loadError ? `BACKEND ERROR · ${loadError}` : "LIVE DATA"}
+        {!loadError && (
+          <>
+            {" "}
+            <span className="banner-sep">·</span>{" "}
+            {loading
+              ? "Loading from the backend…"
+              : "Changes are saved to the database."}
+          </>
+        )}
       </div>
       <div className="table-toolbar">
         <SearchInput
@@ -146,7 +156,7 @@ export default function Inventory() {
             className="icon-button"
             aria-label="More table options"
             onClick={() =>
-              window.showToast("Table options are not configured in this demo.")
+              window.showToast("No extra table options yet.")
             }
           >
             <MoreHorizontal size={18} />
@@ -180,7 +190,7 @@ export default function Inventory() {
                           <b>{p.name}</b>
                           <small>
                             {p.sku} <span className="muted-dot">·</span>{" "}
-                            {p.supplier}
+                            {p.supplier || "Unassigned"}
                           </small>
                         </div>
                       </div>
@@ -221,7 +231,7 @@ export default function Inventory() {
               })}
             </tbody>
           </table>
-          {filtered.length === 0 && (
+          {!loading && filtered.length === 0 && (
             <EmptyState
               title="No products match"
               detail="Try changing your search or filters."
@@ -318,11 +328,17 @@ export default function Inventory() {
             </label>
             <label>
               Supplier
-              <input
-                name="supplier"
-                defaultValue={form === "add" ? "" : form.supplier}
-                placeholder="Supplier name"
-              />
+              <select
+                name="supplier_id"
+                defaultValue={form === "add" ? "" : (form.supplier_id ?? "")}
+              >
+                <option value="">Unassigned / keep current</option>
+                {(supplierList || []).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </label>
             {error && <p className="form-error">{error}</p>}
             <div className="modal-actions">
@@ -333,7 +349,7 @@ export default function Inventory() {
               >
                 Cancel
               </Button>
-              <Button variant="primary" type="submit">
+              <Button variant="primary" type="submit" disabled={saving}>
                 {form === "add" ? "Add product" : "Save changes"}
               </Button>
             </div>
@@ -368,7 +384,7 @@ export default function Inventory() {
             </div>
             <div>
               <small>SUPPLIER</small>
-              <b>{selected.supplier}</b>
+              <b>{selected.supplier || "Unassigned"}</b>
             </div>
           </div>
           <div className="drawer-section">

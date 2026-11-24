@@ -16,7 +16,8 @@ import {
   EmptyState,
   Button,
 } from "../components/common/UI.jsx";
-import { purchaseOrders as initial } from "../services/mock/data.js";
+import { purchaseOrderService } from "../services/api/domainServices.js";
+import { useAsync } from "../services/api/useAsync.js";
 const tone = {
   Draft: "neutral",
   "Pending Approval": "amber",
@@ -24,9 +25,16 @@ const tone = {
   Ordered: "blue",
   Received: "green",
   Rejected: "red",
+  Cancelled: "neutral",
 };
 export default function PurchaseOrders() {
-  const [orders, setOrders] = useState(initial),
+  const {
+      data: orders,
+      loading,
+      error: loadError,
+      reload,
+      setData: setOrders,
+    } = useAsync(() => purchaseOrderService.list(), []),
     [q, setQ] = useState(""),
     [status, setStatus] = useState("All statuses"),
     [selected, setSelected] = useState(null);
@@ -34,7 +42,7 @@ export default function PurchaseOrders() {
     () =>
       orders.filter(
         (o) =>
-          `${o.id} ${o.supplier} ${o.items}`
+          `${o.code} ${o.supplier} ${o.items}`
             .toLowerCase()
             .includes(q.toLowerCase()) &&
           (status === "All statuses" || o.status === status),
@@ -46,20 +54,27 @@ export default function PurchaseOrders() {
       <PageHeader
         eyebrow="OPERATIONS / ORDER HISTORY"
         title="Purchase orders"
-        description="Track approval decisions and demo order history across purchasing."
+        description="Track approval decisions and order history across purchasing."
         actions={
           <Button
             variant="secondary"
-            onClick={() => window.showToast("Order export is a demo action.")}
+            onClick={() => window.showToast("Order export is not implemented yet.")}
           >
             Export history
           </Button>
         }
       />
       <div className="demo-banner">
-        <span className="demo-dot" /> DEMO HISTORY{" "}
-        <span className="banner-sep">·</span> “Ordered” and “Received” statuses
-        represent local demo actions; no supplier was contacted.
+        <span className="demo-dot" />{" "}
+        {loadError ? `BACKEND ERROR · ${loadError}` : "LIVE DATA"}
+        {!loadError && (
+          <>
+            {" "}
+            <span className="banner-sep">·</span> Status changes are saved to
+            the database. “Ordered” only records a status; no supplier is
+            contacted automatically.
+          </>
+        )}
       </div>
       <div className="order-summary-row">
         <div className="panel order-summary">
@@ -93,7 +108,7 @@ export default function PurchaseOrders() {
             <ClipboardList size={17} />
           </span>
           <div>
-            <small>TOTAL DEMO ORDERS</small>
+            <small>TOTAL ORDERS</small>
             <b>{orders.length}</b>
           </div>
         </div>
@@ -134,7 +149,7 @@ export default function PurchaseOrders() {
             className="icon-button"
             aria-label="More options"
             onClick={() =>
-              window.showToast("Table options unavailable in demo.")
+              window.showToast("No extra table options yet.")
             }
           >
             <MoreHorizontal size={18} />
@@ -155,9 +170,9 @@ export default function PurchaseOrders() {
             </thead>
             <tbody>
               {rows.map((o) => (
-                <tr key={o.id} onClick={() => setSelected(o)}>
+                <tr key={o.id} onClick={() => openOrder(o)}>
                   <td>
-                    <b className="order-id">{o.id}</b>
+                    <b className="order-id">{o.code}</b>
                     <small className="unit-label">Created {o.date}</small>
                   </td>
                   <td>{o.supplier}</td>
@@ -166,7 +181,7 @@ export default function PurchaseOrders() {
                   </td>
                   <td>{o.qty}</td>
                   <td>₹{o.cost.toLocaleString("en-IN")}</td>
-                  <td>{o.delivery}</td>
+                  <td>{o.delivery ?? "—"}</td>
                   <td>
                     <Badge tone={tone[o.status]}>{o.status}</Badge>
                   </td>
@@ -174,7 +189,7 @@ export default function PurchaseOrders() {
               ))}
             </tbody>
           </table>
-          {rows.length === 0 && (
+          {!loading && rows.length === 0 && (
             <EmptyState
               title="No orders match"
               detail="Change the search term or status filter."
@@ -182,7 +197,7 @@ export default function PurchaseOrders() {
           )}
         </div>
         <div className="table-bottom">
-          <span>Showing {rows.length} demo records</span>
+          <span>Showing {rows.length} records</span>
           <span className="pagination-note">
             Status changes are limited to actions shown in the order detail.
           </span>
@@ -196,7 +211,7 @@ export default function PurchaseOrders() {
           <div className="order-drawer-id">
             <ClipboardList size={19} />
             <div>
-              <b>{selected.id}</b>
+              <b>{selected.code}</b>
               <span>Created {selected.date}</span>
             </div>
             <Badge tone={tone[selected.status]}>{selected.status}</Badge>
@@ -216,7 +231,7 @@ export default function PurchaseOrders() {
             </div>
             <div>
               <small>EXPECTED DELIVERY</small>
-              <b>{selected.delivery}</b>
+              <b>{selected.delivery ?? "—"}</b>
             </div>
           </div>
           <div className="drawer-section">
@@ -241,10 +256,12 @@ export default function PurchaseOrders() {
             ))}
           </div>
           <p className="drawer-note">
-            <CalendarDays size={15} /> Demo timeline. Changes are local; the
-            order was not sent to a supplier.
+            <CalendarDays size={15} /> Changes are saved to the backend. The
+            order is never sent to a supplier automatically.
           </p>
-          {["Draft", "Approved", "Ordered"].includes(selected.status) && (
+          {["Draft", "Pending Approval", "Approved", "Ordered"].includes(
+            selected.status,
+          ) && (
             <div className="drawer-actions">
               {selected.status === "Draft" && (
                 <Button
@@ -254,14 +271,27 @@ export default function PurchaseOrders() {
                   Submit for approval
                 </Button>
               )}
+              {selected.status === "Pending Approval" && (
+                <>
+                  <Button
+                    variant="ghost-danger"
+                    onClick={() => change("Rejected")}
+                  >
+                    Reject
+                  </Button>
+                  <Button variant="primary" onClick={() => change("Approved")}>
+                    Approve order
+                  </Button>
+                </>
+              )}
               {selected.status === "Approved" && (
                 <Button variant="primary" onClick={() => change("Ordered")}>
-                  Mark ordered (demo)
+                  Mark ordered
                 </Button>
               )}
               {selected.status === "Ordered" && (
                 <Button variant="primary" onClick={() => change("Received")}>
-                  Mark received (demo)
+                  Mark received
                 </Button>
               )}
             </div>
@@ -271,23 +301,22 @@ export default function PurchaseOrders() {
       {/* selected closure */}
     </>
   );
-  function change(next) {
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === selected.id
-          ? {
-              ...o,
-              status: next,
-              history: [...o.history, `Oct 22 · ${next} (demo)`],
-            }
-          : o,
-      ),
-    );
-    setSelected((prev) => ({
-      ...prev,
-      status: next,
-      history: [...prev.history, `Oct 22 · ${next} (demo)`],
-    }));
-    window.showToast(`Order status changed to ${next} in this demo.`);
+  async function openOrder(o) {
+    setSelected({ ...o, history: o.history || [] });
+    try {
+      setSelected(await purchaseOrderService.get(o.id));
+    } catch (e) {
+      window.showToast(e.message);
+    }
+  }
+  async function change(next) {
+    try {
+      await purchaseOrderService.updateStatus(selected.id, next);
+      setSelected(await purchaseOrderService.get(selected.id));
+      await reload();
+      window.showToast(`Order status changed to ${next}.`);
+    } catch (e) {
+      window.showToast(e.message);
+    }
   }
 }

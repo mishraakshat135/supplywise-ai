@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import {
   AreaChart,
   Area,
@@ -27,12 +26,15 @@ import {
 import { Link } from "react-router-dom";
 import PageHeader from "../components/common/PageHeader.jsx";
 import { Badge } from "../components/common/UI.jsx";
-import {
-  products,
-  demand,
-  activity,
-  purchaseOrders,
-} from "../services/mock/data.js";
+import { dashboardService } from "../services/api/domainServices.js";
+import { useAsync } from "../services/api/useAsync.js";
+const timeAgo = (iso) => {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  if (Number.isNaN(mins)) return "";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)} h ago`;
+  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+};
 const fmt = (n) =>
   new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -58,15 +60,23 @@ const Kpi = ({ label, value, change, up, icon: Icon, tone, detail }) => (
   </article>
 );
 export default function Dashboard() {
-  const totalValue = useMemo(
-    () => products.reduce((a, p) => a + p.stock * p.cost, 0),
-    [],
-  );
-  const low = products.filter((p) => p.stock <= p.reorder).length;
+  const { data: s, loading, error } = useAsync(() => dashboardService.summary(), null);
+  const k = s?.kpis ?? {};
+  const demand = s?.demand ?? [];
+  const activity = s?.activity ?? [];
+  const categories = s?.category_distribution ?? [];
+  const lowStock = s?.low_stock ?? [];
   return (
     <>
       <PageHeader
-        eyebrow="THURSDAY, OCTOBER 22, 2026"
+        eyebrow={new Date()
+          .toLocaleDateString("en-IN", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })
+          .toUpperCase()}
         title="Good morning, Arjun"
         description="Here’s what needs your attention across the supply chain today."
         actions={
@@ -74,7 +84,7 @@ export default function Dashboard() {
             <button
               className="button secondary"
               onClick={() =>
-                window.showToast("Report export is a demo action.")
+                window.showToast("Report export is not implemented yet.")
               }
             >
               Export report
@@ -86,33 +96,41 @@ export default function Dashboard() {
         }
       />
       <div className="demo-banner">
-        <span className="demo-dot" /> DEMO WORKSPACE{" "}
-        <span className="banner-sep">·</span> Data shown is illustrative and is
-        not connected to a live inventory system.
+        <span className="demo-dot" />{" "}
+        {error ? `BACKEND ERROR · ${error}` : "LIVE DATA"}
+        {!error && (
+          <>
+            {" "}
+            <span className="banner-sep">·</span>{" "}
+            {loading
+              ? "Loading from the backend…"
+              : "Figures come from your PostgreSQL database."}
+          </>
+        )}
       </div>
       <div className="kpi-grid">
         <Kpi
           label="Total products"
-          value="1,284"
-          change="4.2%"
+          value={k.total_products ?? 0}
+          change="Active"
           up
           icon={Package}
           tone="violet"
-          detail="vs. last month"
+          detail="SKUs tracked"
         />
         <Kpi
           label="Inventory value"
-          value={fmt(totalValue + 2150000)}
-          change="2.1%"
+          value={fmt(k.inventory_value ?? 0)}
+          change="Live"
           up
           icon={Wallet}
           tone="blue"
-          detail="across 3 locations"
+          detail="stock × unit cost"
         />
         <Kpi
           label="Below reorder point"
-          value={low}
-          change="3 items"
+          value={k.below_reorder_point ?? 0}
+          change={`${k.below_reorder_point ?? 0} items`}
           up={false}
           icon={TriangleAlert}
           tone="amber"
@@ -120,21 +138,21 @@ export default function Dashboard() {
         />
         <Kpi
           label="Stockout risk"
-          value="2"
-          change="1 critical"
+          value={k.stockout_risk ?? 0}
+          change="critical"
           up={false}
           icon={ShieldAlert}
           tone="red"
-          detail="within 7 days"
+          detail="≤ 45% of reorder point"
         />
         <Kpi
           label="Pending decisions"
-          value="4"
-          change="2 new"
+          value={k.pending_decisions ?? 0}
+          change={`${k.pending_recommendations ?? 0} recs`}
           up
           icon={ClipboardCheck}
           tone="teal"
-          detail="recommendations"
+          detail={`${k.pending_purchase_orders ?? 0} POs awaiting`}
         />
       </div>
       <div className="dashboard-grid">
@@ -142,7 +160,7 @@ export default function Dashboard() {
           <div className="panel-heading">
             <div>
               <h2>Demand overview</h2>
-              <p>Daily units · October 2026</p>
+              <p>Daily units sold · last 30 days</p>
             </div>
             <div className="chart-legend">
               <span>
@@ -151,7 +169,7 @@ export default function Dashboard() {
               </span>
               <span>
                 <i className="legend-dot forecast" />
-                Illustrative forecast
+                Forecast
               </span>
             </div>
           </div>
@@ -201,7 +219,7 @@ export default function Dashboard() {
                 />
                 <Area
                   dataKey="forecast"
-                  name="Illustrative forecast"
+                  name="Forecast"
                   stroke="#818cf8"
                   fill="none"
                   strokeWidth={2}
@@ -213,7 +231,7 @@ export default function Dashboard() {
           </div>
           <div className="chart-foot">
             <span>
-              <Activity size={14} /> Forecast boundary <b>Oct 19</b>
+              <Activity size={14} /> Sales history <b>last 30 days</b>
             </span>
             <Link to="/forecasting">
               View forecast <ArrowRight size={14} />
@@ -224,12 +242,12 @@ export default function Dashboard() {
           <div className="panel-heading">
             <div>
               <h2>Inventory by category</h2>
-              <p>Share of active SKUs</p>
+              <p>Number of active SKUs</p>
             </div>
             <button
               className="more-button"
               onClick={() =>
-                window.showToast("Category breakdown shown for demo data.")
+                window.showToast("Showing live category counts.")
               }
             >
               •••
@@ -238,12 +256,7 @@ export default function Dashboard() {
           <div className="bar-chart">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
-                data={[
-                  { name: "Electronics", value: 38 },
-                  { name: "Packaging", value: 26 },
-                  { name: "Hardware", value: 21 },
-                  { name: "Chemicals", value: 15 },
-                ]}
+                data={categories}
                 layout="vertical"
                 margin={{ top: 5, right: 14, left: 0, bottom: 0 }}
               >
@@ -270,10 +283,10 @@ export default function Dashboard() {
                   }}
                 />
                 <Bar dataKey="value" radius={[0, 5, 5, 0]} barSize={13}>
-                  {[0, 1, 2, 3].map((x) => (
+                  {categories.map((c, x) => (
                     <Cell
-                      key={x}
-                      fill={["#14b8a6", "#7182ee", "#a78bfa", "#f59e0b"][x]}
+                      key={c.name}
+                      fill={["#14b8a6", "#7182ee", "#a78bfa", "#f59e0b"][x % 4]}
                     />
                   ))}
                 </Bar>
@@ -282,7 +295,7 @@ export default function Dashboard() {
           </div>
           <div className="distribution-foot">
             <span>
-              <i className="legend-dot actual" /> 1,284 active products
+              <i className="legend-dot actual" /> {k.total_products ?? 0} active products
             </span>
             <Link to="/inventory">
               View inventory <ArrowRight size={14} />
@@ -298,7 +311,7 @@ export default function Dashboard() {
             <button
               className="text-button"
               onClick={() =>
-                window.showToast("You’re viewing the latest demo activity.")
+                window.showToast("You’re viewing the latest activity.")
               }
             >
               View all <ArrowRight size={14} />
@@ -314,7 +327,7 @@ export default function Dashboard() {
                   <b>{item.title}</b>
                   <span>{item.detail}</span>
                 </div>
-                <time>{item.time}</time>
+                <time>{timeAgo(item.time)}</time>
               </div>
             ))}
           </div>
@@ -334,8 +347,13 @@ export default function Dashboard() {
               <TriangleAlert size={16} />
             </span>
             <div>
-              <b>2 products at critical stock</b>
-              <span>Bearings and control relays · review replenishment</span>
+              <b>{k.stockout_risk ?? 0} products at critical stock</b>
+              <span>
+                {lowStock
+                  .slice(0, 2)
+                  .map((p) => p.name)
+                  .join(", ") || "Nothing is below its reorder point"}
+              </span>
             </div>
             <Link to="/inventory" aria-label="View critical stock">
               <ArrowRight size={16} />
@@ -346,13 +364,10 @@ export default function Dashboard() {
               <Clock3 size={16} />
             </span>
             <div>
-              <b>4 recommendations pending</b>
+              <b>{k.pending_recommendations ?? 0} recommendations pending</b>
               <span>
-                {
-                  purchaseOrders.filter((o) => o.status === "Pending Approval")
-                    .length
-                }{" "}
-                purchase order awaiting approval
+                {k.pending_purchase_orders ?? 0} purchase order(s) awaiting
+                approval
               </span>
             </div>
             <Link to="/procurement" aria-label="Review recommendations">
@@ -362,12 +377,13 @@ export default function Dashboard() {
           <div className="summary-box">
             <div className="summary-title">
               <TrendingUp size={15} /> Operations summary{" "}
-              <Badge tone="teal">DEMO</Badge>
+              <Badge tone="teal">LIVE</Badge>
             </div>
             <p>
-              Three SKUs are below their reorder points. Two are marked critical
-              in this sample. A supplier comparison is ready for review; confirm
-              MOQ and delivery terms before acting.
+              {k.below_reorder_point ?? 0} SKU(s) are below their reorder point
+              and {k.stockout_risk ?? 0} are critical. Open the AI Procurement
+              Center to generate recommendations, then confirm MOQ and delivery
+              terms before approving.
             </p>
           </div>
         </section>

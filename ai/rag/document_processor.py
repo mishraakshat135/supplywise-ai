@@ -32,7 +32,7 @@ class DocumentProcessor:
             raise ValueError(f"unsupported file type: {extension}\nonly pdf and txt are supported")
 
         if extension == ".pdf":
-            loaded_document = PyPDFLoader(str(path).load())
+            loaded_documents = PyPDFLoader(str(path)).load()
         else:
             loaded_documents = TextLoader(str(path), encoding="utf-8").load()
 

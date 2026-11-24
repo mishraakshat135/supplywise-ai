@@ -1,0 +1,10 @@
+# Everything imported by ai/ (verified by reading the source). Needed for the real multi-agent workflow + RAG.
+langgraph
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-google-genai
+chromadb
+sentence-transformers
+python-dotenv
+pypdf
